@@ -10,10 +10,7 @@ from azure.eventhub import EventHubProducerClient, EventData
 
 # carrega variáveis de ambiente do arquivo .env
 BASE_DIR = Path(__file__).resolve().parents[2]
-env_path = BASE_DIR / ".env"
-
-load_dotenv(dotenv_path=env_path)
-
+load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 CONNECTION_STR = os.getenv("AZURE_EVENTHUB_CONNECTION_STRING")
 EVENTHUB_NAME = "telemetry"
