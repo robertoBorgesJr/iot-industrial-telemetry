@@ -1,6 +1,17 @@
 import os
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp
+import socket
+import tempfile
+
+# carrega variáveis de ambiente do arquivo .env
+BASE_DIR = Path(__file__).resolve().parents[2]
+env_path = BASE_DIR / ".env"
+
+load_dotenv(dotenv_path=env_path)
 
 # ==============================================================================
 # CONFIGURAÇÕES DE ACESSO
@@ -24,12 +35,36 @@ PACKAGES = [
     "org.apache.hadoop:hadoop-azure:3.3.4"
 ]
 
+local_ip = socket.gethostbyname(socket.gethostname())
+
+tmp_dir = tempfile.gettempdir()
+hadoop_tmp_dir = os.path.join(tmp_dir, "hadoop_tmp").replace("\\", "/")
+
+# Força o ecossistema Python/Java do Spark a se comunicar APENAS via loopback local
+os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
+os.environ["PYSPARK_PYTHON"] = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
+# Usamos um caminho relativo limpo para evitar o problema do "C:/" que confunde o Hadoop no Windows
+hadoop_tmp_dir = "/tmp/hadoop_tmp"
+spark_local_dir = "/tmp/spark_local"
+abfs_buffer_dir = "/tmp/abfs_buffer"
+
 spark = SparkSession.builder \
     .appName("IoT-Streaming-Bronze") \
+    .master("local[2]") \
     .config("spark.jars.packages", ",".join(PACKAGES)) \
     .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
     .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
     .config("spark.driver.host", "127.0.0.1") \
+    .config("spark.driver.bindAddress", "127.0.0.1") \
+    .config("spark.driver.port", "7077") \
+    .config("spark.blockManager.port", "6060") \
+    .config("spark.network.timeout", "800s") \
+    .config("spark.executor.heartbeatInterval", "120s") \
+    .config("spark.local.dir", os.path.join(tmp_dir, "spark_local").replace("\\", "/")) \
+    .config("spark.hadoop.hadoop.tmp.dir", hadoop_tmp_dir) \
+    .config("spark.hadoop.fs.azure.buffer.dir", os.path.join(tmp_dir, "abfs_buffer").replace("\\", "/")) \
     .config(f"fs.azure.account.key.{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net", STORAGE_ACCOUNT_KEY) \
     .getOrCreate()
 

@@ -1,11 +1,21 @@
 import os
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
 import json
 import time
 import random
 import datetime
 from azure.eventhub import EventHubProducerClient, EventData
 
-CONNECTION_STR = os.getenv("EVENTHUB_CONNECTION_STRING")
+# carrega variáveis de ambiente do arquivo .env
+BASE_DIR = Path(__file__).resolve().parents[2]
+env_path = BASE_DIR / ".env"
+
+load_dotenv(dotenv_path=env_path)
+
+
+CONNECTION_STR = os.getenv("AZURE_EVENTHUB_CONNECTION_STRING")
 EVENTHUB_NAME = "telemetry"
 
 def generate_iot_data():
