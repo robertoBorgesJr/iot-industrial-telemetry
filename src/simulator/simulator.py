@@ -35,6 +35,7 @@ def generate_iot_data():
     if random.random() < 0.05:
         payload["reading_value"] = round(payload["reading_value"] * 1.5, 2)
         payload["status"] = "critical"
+        payload["device_id"] = None  # Simula perda de identificação do dispositivo
         
     return payload
 
