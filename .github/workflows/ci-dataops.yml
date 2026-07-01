@@ -34,6 +34,6 @@ jobs:
       env:
         # Define variáveis para o Spark rodar de forma leve no container do GitHub
         SPARK_LOCAL_IP: "127.0.0.1"
-        PYTHONPATH: .
+        PYTHONPATH: src/
       run: |
         python -m pytest src/tests/ -v
