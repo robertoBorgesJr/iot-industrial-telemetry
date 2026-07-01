@@ -3,6 +3,7 @@ import sys
 import pytest
 from pyspark.sql import SparkSession
 from chispa.dataframe_comparer import assert_df_equality
+from src.streaming.stream_silver import transform_iot_data
 
 # Força o Spark e seus workers a usarem estritamente o localhost no Windows
 os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"

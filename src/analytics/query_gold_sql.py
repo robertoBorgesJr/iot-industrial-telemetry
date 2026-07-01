@@ -19,7 +19,7 @@ con.execute("LOAD azure;")
 con.execute("INSTALL delta;")
 con.execute("LOAD delta;")
 
-# 3. CRIAÇÃO DO SECRET (Isso injeta a credencial direto no Delta Kernel do Rust)
+# 3. CRIAÇÃO DO SECRET (Injeta a credencial direto no Delta Kernel)
 print("🔑 Configurando segredos de autenticação para o Delta Kernel...")
 con.execute(f"""
     CREATE OR REPLACE SECRET azure_secret (
@@ -30,22 +30,24 @@ con.execute(f"""
     );
 """)
 
-# 4. Ajuste do Protocolo da URL (O Delta Kernel prefere 'az://' em vez de 'azure://')
+# 4. Ajuste do Protocolo da URL para a Gold
 GOLD_PATH = f"az://datalake/gold/telemetry_agg_1m"
 
-print("🔍 Executando Query SQL na Camada Gold...")
+print("🔍 Executando Query SQL Analítica na Camada Gold...")
 
 try:
-    # 5. Consulta SQL limpa usando o delta_scan nativo
+    # 5. Consulta SQL adaptada para o esquema chave-valor de Big Data
     query = f"""
         SELECT 
             device_id,
             window_start,
-            ROUND(avg_temperature, 2) AS temp_media,
-            ROUND(avg_pressure, 2) AS pressao_media,
-            total_events
+            sensor_type,
+            ROUND(val_medio, 2) AS valor_medio,
+            ROUND(val_maximo, 2) AS valor_maximo,
+            total_eventos
         FROM delta_scan('{GOLD_PATH}')
-        WHERE avg_temperature > 60.0
+        WHERE sensor_type = 'temperature' 
+          AND val_medio > 60.0
         ORDER BY window_start DESC
         LIMIT 10;
     """
@@ -53,7 +55,10 @@ try:
     df_result = con.execute(query).df()
     
     print("\n📊 --- RELATÓRIO ANALÍTICO (SQL SERVERLESS VIA DUCKDB) ---")
-    print(df_result.to_string(index=False))
+    if not df_result.empty:
+        print(df_result.to_string(index=False))
+    else:
+        print("ℹ️ Nenhuma anomalia de temperatura acima de 60.0°C encontrada nos últimos registros.")
     
 except Exception as e:
     print(f"\n❌ Erro ao processar a query SQL: {e}")
