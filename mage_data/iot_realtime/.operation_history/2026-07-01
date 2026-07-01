@@ -1,0 +1,1 @@
+{"operation": "create", "resource": {"type": "pipeline", "uuid": "load_silver_delta"}, "timestamp": 1782912500, "user": 1}

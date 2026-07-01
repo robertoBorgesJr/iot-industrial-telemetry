@@ -1,0 +1,1 @@
+{"device_id": "str", "event_time": "datetime64[ns]", "temperature": "float32", "pressure": "float32", "vibration": "float32", "status": "str", "ingested_at_hub": "datetime64[ns]", "bronze_processed_at": "datetime64[ns]"}

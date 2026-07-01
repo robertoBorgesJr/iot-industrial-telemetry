@@ -11,3 +11,18 @@
 # Arquivos temporários do sistema
 .DS_Store
 .env
+
+# arquivos pytest
+.pytest_cache/
+
+# Mage.ai - Arquivos locais e de runtime
+**/__pycache__/
+**/.mage_variables/
+**/sqlite.db
+**/mage_user_config.yaml
+**/.logs/
+**/backups/
+**/.file_versions/
+**/operation_history/
+**/.cache/
+**/.ssh_tunnel/
