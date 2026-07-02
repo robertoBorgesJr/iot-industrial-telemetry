@@ -6,7 +6,6 @@ os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
-import requests
 import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
