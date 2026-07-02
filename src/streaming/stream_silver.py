@@ -1,109 +1,152 @@
+# src/streaming/stream_silver.py
+
 import os
 import sys
-import requests
-import json
 from pathlib import Path
 from dotenv import load_dotenv
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, from_unixtime, to_timestamp, current_timestamp, lit
 
-# 1. Carregar chaves de ambiente
+# Load environment variables early
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
-STORAGE_ACCOUNT_NAME = "stiotanalyticsrbgsprod"
-STORAGE_ACCOUNT_KEY  = os.getenv("AZURE_STORAGE_ACCESS_KEY")
-WEBHOOK_URL          = os.getenv("WEBHOOK_ALERTS_URL")
-
-BRONZE_PATH  = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/bronze/telemetry/"
-SILVER_PATH  = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry/"
-DLQ_PATH     = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/dlq/"
-CHECKPOINT   = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry_checkpoint_v2/"
-
-# Configurações do ecossistema local Windows
 os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
-spark = SparkSession.builder \
-    .appName("IoT-Streaming-Silver-Alerts") \
-    .master("local[2]") \
-    .config("spark.jars.packages", "io.delta:delta-spark_4.1_2.13:4.1.0,org.apache.hadoop:hadoop-azure:3.3.4") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .config(f"fs.azure.account.key.{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net", STORAGE_ACCOUNT_KEY) \
-    .config("spark.driver.host", "127.0.0.1") \
-    .config("spark.driver.bindAddress", "127.0.0.1") \
-    .config("spark.network.timeout", "800s") \
-    .config("spark.local.dir", "/tmp/spark_local_silver") \
-    .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop_tmp_silver") \
-    .config("fs.azure.account.key.stiotanalyticsrbgsprod.dfs.core.windows.net", STORAGE_ACCOUNT_KEY) \
-    .getOrCreate()
+import requests
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import col, from_json, when, lit
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
-# Schema de validação
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
-IOT_SCHEMA = StructType([
-    StructField("device_id", StringType(), True),
-    StructField("timestamp", LongType(), True),
-    StructField("temperature", DoubleType(), True),
-    StructField("pressure", DoubleType(), True),
-    StructField("vibration", DoubleType(), True),
-    StructField("status", StringType(), True)
-])
+STORAGE_ACCOUNT_NAME = "stiotanalyticsrbgsprod"
+STORAGE_ACCOUNT_KEY = os.getenv("AZURE_STORAGE_ACCESS_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_ALERTS_URL")
 
-def enviar_alerta_webhook(mensagem):
-    """ Envia uma notificação formatada para o canal de incidentes """
-    if not WEBHOOK_URL or "sua_url_aqui" in WEBHOOK_URL:
-        print(f"⚠️ [SIMULAÇÃO DE ALERTA]: {mensagem}")
+BRONZE_PATH = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/bronze/telemetry/"
+SILVER_PATH = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry/"
+CHECKPOINT = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry_checkpoint_v2/"
+
+# Remove module-level SparkSession creation
+_spark = None
+
+def get_spark_session() -> SparkSession:
+    """Lazily creates and returns the SparkSession with Azure config only if credentials exist."""
+    global _spark
+    if _spark is not None:
+        return _spark
+    
+    builder = SparkSession.builder \
+        .appName("IoT-Silver-Streaming-Processor") \
+        .master("local[2]") \
+        .config("spark.jars.packages", "io.delta:delta-spark_4.1_2.13:4.1.0,org.apache.hadoop:hadoop-azure:3.3.4,org.apache.hadoop:hadoop-common:3.3.4") \
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+        .config("spark.driver.host", "127.0.0.1") \
+        .config("spark.driver.bindAddress", "127.0.0.1") \
+        .config("spark.network.timeout", "800s") \
+        .config("spark.local.dir", "/tmp/spark_local_silver") \
+        .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop_tmp_silver")
+    
+    # Only set Azure config if credentials are available
+    if STORAGE_ACCOUNT_KEY:
+        builder = builder.config(
+            f"fs.azure.account.key.{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net",
+            STORAGE_ACCOUNT_KEY
+        )
+    
+    _spark = builder.getOrCreate()
+    return _spark
+
+def get_iot_schema() -> StructType:
+    return StructType([
+        StructField("timestamp", StringType(), True),
+        StructField("device_id", StringType(), True),
+        StructField("sensor_type", StringType(), True),
+        StructField("reading_value", DoubleType(), True),
+        StructField("status", StringType(), True),
+        StructField("is_anomaly", StringType(), True)
+    ])
+
+def transform_iot_data(df_raw: DataFrame) -> DataFrame:
+    """Pure transformation function (Silver layer) - accepts DataFrame from any source."""
+    schema = get_iot_schema()
+    
+    df_parsed = df_raw.withColumn("parsed_data", from_json(col("raw_payload"), schema)) \
+                      .select("parsed_data.*", "ingested_at_hub")
+    
+    df_silver = df_parsed.withColumn(
+        "is_anomaly",
+        when((col("status") == "critical") | (col("reading_value") > 100.0), True).otherwise(False)
+    )
+    
+    return df_silver.select(
+        col("timestamp").cast("timestamp").alias("timestamp"), 
+        col("device_id"), 
+        col("sensor_type"), 
+        col("reading_value"), 
+        col("status"),
+        col("is_anomaly"),
+        col("ingested_at_hub")
+    )
+
+def send_discord_alert(anomaly_percentage, total_rows):
+    if not WEBHOOK_URL:
         return
     
-    payload = {"content": f"🚨 **SISTEMA DE MONITORAMENTO IoT** 🚨\n{mensagem}"}
+    payload = {
+        "embeds": [{
+            "title": "🚨 Alerta de Anomalia na Esteira - Camada Silver",
+            "color": 15158332,
+            "description": f"Foi detectada uma alta taxa de anomalias nos sensores IoT industriais.",
+            "fields": [
+                {"name": "Percentual de Anomalias", "value": f"{anomaly_percentage:.2f}%", "inline": True},
+                {"name": "Total de Registros no Lote", "value": str(total_rows), "inline": True},
+                {"name": "Status do Pipeline", "value": "⚠️ Investigação Necessária", "inline": False}
+            ],
+            "footer": {"text": "Sistema de Monitoramento IoT Real-time"}
+        }]
+    }
+    
     try:
-        requests.post(WEBHOOK_URL, json=payload, timeout=5)
+        response = requests.post(WEBHOOK_URL, json=payload)
+        response.raise_for_status()
     except Exception as e:
-        print(f"Falha ao enviar webhook: {e}")
+        print(f"Erro ao enviar alerta para o Discord: {e}")
 
-def processar_lote_com_alertas(df_lote, batch_id):
-    """ Processa o micro-batch atual, desviando erros para a DLQ e checando anomalias """
-    if df_lote.isEmpty():
-        return
-
-    # Parse inicial do payload bruto
-    df_parsed = df_lote.withColumn("parsed", from_json(col("raw_payload"), IOT_SCHEMA)) \
-                       .select("parsed.*", "ingested_at_hub", "processed_at_spark")
-
-    # Separar dados bons (Válidos) e ruins (DLQ)
-    df_validos = df_parsed.filter(col("device_id").isNotNull() & (col("temperature") > -200))
-    df_dlq = df_parsed.filter(col("device_id").isNull() | (col("temperature") <= -200)) \
-                      .withColumn("rejected_at", current_timestamp()) \
-                      .withColumn("reason", lit("Schema invalido ou dados de telemetria corrompidos"))
-
-    # 1. Salva os dados limpos na Silver
-    if not df_validos.isEmpty():
-        df_validos.write.format("delta").mode("append").save(SILVER_PATH)
+def process_micro_batch(df_batch: DataFrame, batch_id: int):
+    total_rows = df_batch.count()
+    
+    if total_rows > 0:
+        anomaly_count = df_batch.filter(col("is_anomaly") == True).count()
+        anomaly_percentage = (anomaly_count / total_rows) * 100
         
-        # 🚨 ANÁLISE DE ANOMALIAS EM TEMPO REAL: Procurar superaquecimento imediato
-        # Se a temperatura passar de 110 graus, disparar alerta
-        df_criticos = df_validos.filter(col("temperature") > 110.0).collect()
-        for linha in df_criticos:
-            msg = f"Máquina `{linha['device_id']}` registrou Temperatura Crítica de **{linha['temperature']}°C**! Risco de quebra de componente."
-            enviar_alerta_webhook(msg)
+        print(f"📥 Processando Batch ID: {batch_id} | Total Linhas: {total_rows} | Anomalias: {anomaly_percentage:.2f}%")
+        
+        if anomaly_percentage >= 5.0:
+            send_discord_alert(anomaly_percentage, total_rows)
+        
+        df_batch.write \
+            .format("delta") \
+            .mode("append") \
+            .save(SILVER_PATH)
 
-    # 2. Isola os dados ruins na DLQ para não quebrar a esteira
-    if not df_dlq.isEmpty():
-        print(f"❌ {df_dlq.count()} registros corrompidos enviados para a DLQ.")
-        df_dlq.write.format("delta").mode("append").save(DLQ_PATH)
-        enviar_alerta_webhook(f"Aviso: `{df_dlq.count()}` mensagens corrompidas foram descartadas e enviadas para a DLQ.")
+def start_streaming():
+    spark = get_spark_session()
+    
+    print("🤖 Iniciando consumo da camada Bronze em tempo real...")
+    
+    df_bronze_stream = spark.readStream \
+        .format("delta") \
+        .load(BRONZE_PATH)
+    
+    df_transformed_stream = transform_iot_data(df_bronze_stream)
+    
+    query = df_transformed_stream.writeStream \
+        .foreachBatch(process_micro_batch) \
+        .option("checkpointLocation", CHECKPOINT) \
+        .start()
+    
+    query.awaitTermination()
 
-# Leitura streaming contínua da Bronze
-df_bronze_stream = spark.readStream.format("delta").load(BRONZE_PATH)
-
-print("📡 Iniciando esteira Silver com Monitoramento e DLQ ativo...")
-
-# Execução usando o foreachBatch para aplicar a nossa função Python customizada por lote
-query = df_bronze_stream.writeStream \
-    .foreachBatch(processar_lote_com_alertas) \
-    .option("checkpointLocation", CHECKPOINT) \
-    .start()
-
-query.awaitTermination()
+if __name__ == "__main__":
+    start_streaming()

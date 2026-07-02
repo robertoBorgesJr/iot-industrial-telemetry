@@ -74,3 +74,5 @@ resource "azurerm_eventhub" "iot_hub" {
   partition_count     = 2
   message_retention   = 1 # Mantém as mensagens por 1 dia (mínimo na camada Standard)
 }
+
+# fim
