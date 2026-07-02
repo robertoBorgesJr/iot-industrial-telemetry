@@ -1,0 +1,3 @@
+@echo off
+echo Iniciando o Mage.ai Orquestrador...
+docker run -it --rm -p 6789:6789 -e MAGE_REQUIRE_AUTHENTICATION=0 -v "%cd%:/home/src" mageai/mageai mage start iot_orchestrator

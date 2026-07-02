@@ -5,24 +5,22 @@ from dotenv import load_dotenv
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, window, avg, max, min, count
 
-# 1. Carregar chaves de ambiente
+# Carregar chaves de ambiente
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(dotenv_path=BASE_DIR / ".env")
+
+# Forçar amarração de rede no Windows (Seu ambiente local de desenvolvimento)
+os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
+os.environ["PYSPARK_PYTHON"] = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 STORAGE_ACCOUNT_NAME = "stiotanalyticsrbgsprod"
 STORAGE_ACCOUNT_KEY  = os.getenv("AZURE_STORAGE_ACCESS_KEY")
 
-# 2. Caminhos da Arquitetura Medalhão na Azure
-# Nota: Ajustado de 'abfss://' para coincidir com o protocolo unificado que estamos usando
+# Caminhos da Arquitetura Medalhão na Azure
 SILVER_PATH    = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry/"
 GOLD_PATH      = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/gold/telemetry_agg_1m/"
 GOLD_CHECKPOINT= f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/gold/telemetry_agg_1m_checkpoint/"
-
-
-# 3. Forçar amarração de rede no Windows (Seu ambiente local de desenvolvimento)
-os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
-os.environ["PYSPARK_PYTHON"] = sys.executable
-os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 spark = SparkSession.builder \
     .appName("IoT-Streaming-Gold") \
@@ -35,17 +33,17 @@ spark = SparkSession.builder \
     .config("spark.network.timeout", "800s") \
     .config("spark.local.dir", "/tmp/spark_local_gold") \
     .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop_tmp_gold") \
-    .config(f"fs.azure.account.key.{STORAGE_ACCOUNT_NAME}.blob.core.windows.net", STORAGE_ACCOUNT_KEY) \
+    .config(f"fs.azure.account.key.{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net", STORAGE_ACCOUNT_KEY) \
     .getOrCreate()
 
 print("✅ Spark iniciado para a Camada Gold com suporte ao novo esquema.")
 
-# 4. LEITURA STREAMING (Lendo da camada Silver - Certifique-se de usar o formato correto Parquet/Delta)
+# LEITURA STREAMING (Lendo da camada Silver - Certifique-se de usar o formato correto Parquet/Delta)
 df_silver_stream = spark.readStream \
     .format("delta") \
     .load(SILVER_PATH)
 
-# 5. AGREGAÇÃO EM TEMPO REAL ADAPTADA (Modelo Chave-Valor)
+# AGREGAÇÃO EM TEMPO REAL ADAPTADA (Modelo Chave-Valor)
 # Incluímos o 'sensor_type' no groupBy para segmentar as métricas de forma limpa!
 df_gold_aggregated = df_silver_stream \
     .withWatermark("timestamp", "2 minutes") \
@@ -71,7 +69,7 @@ df_gold_aggregated = df_silver_stream \
         col("total_eventos")
     )
 
-# 6. ESCRITA STREAMING NA GOLD
+# ESCRITA STREAMING NA GOLD
 print("📡 Agregando dados (sensor_type/reading_value) em tempo real e gravando na Gold...")
 
 query_gold = df_gold_aggregated.writeStream \

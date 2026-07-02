@@ -1,21 +1,51 @@
 import os
-import requests
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# 1. Carrega as variáveis de ambiente do arquivo .env
+BASE_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(dotenv_path=BASE_DIR / ".env")
+
+# Configurações do ecossistema local Windows
+os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
+os.environ["PYSPARK_PYTHON"] = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
+import requests
 from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col, from_json, when, lit
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
-# 1. Carrega as variáveis de ambiente do arquivo .env
-load_dotenv()
+STORAGE_ACCOUNT_NAME = "stiotanalyticsrbgsprod"
+STORAGE_ACCOUNT_KEY  = os.getenv("AZURE_STORAGE_ACCESS_KEY")
+WEBHOOK_URL          = os.getenv("WEBHOOK_ALERTS_URL")
 
-AZURE_STORAGE_ACCOUNT = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "stiotanalyticsrbgsprod")
-AZURE_STORAGE_KEY = os.getenv("AZURE_STORAGE_ACCESS_KEY")
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+BRONZE_PATH  = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/bronze/telemetry/"
+SILVER_PATH  = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry/"
+CHECKPOINT   = f"abfss://datalake@{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net/silver/telemetry_checkpoint_v2/"
 
-BRONZE_PATH = f"abfss://datalake@{AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/bronze/telemetry/"
-SILVER_PATH = f"abfss://datalake@{AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/silver/telemetry/"
-CHECKPOINT_PATH = f"abfss://datalake@{AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net/silver/telemetry_checkpoint_v2/"
+spark = SparkSession.builder \
+    .appName("IoT-Silver-Streaming-Processor") \
+    .master("local[2]") \
+    .config("spark.jars.packages", "io.delta:delta-spark_4.1_2.13:4.1.0,org.apache.hadoop:hadoop-azure:3.3.4,org.apache.hadoop:hadoop-common:3.3.4") \
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+    .config("spark.driver.host", "127.0.0.1") \
+    .config("spark.driver.bindAddress", "127.0.0.1") \
+    .config("spark.network.timeout", "800s") \
+    .config("spark.local.dir", "/tmp/spark_local_silver") \
+    .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop_tmp_silver") \
+    .config(f"fs.azure.account.key.{STORAGE_ACCOUNT_NAME}.dfs.core.windows.net", STORAGE_ACCOUNT_KEY) \
+    .getOrCreate()    
+
+print("🤖 Iniciando consumo da camada Bronze em tempo real...")
+
+    # Leitura dos dados brutos em streaming da Bronze
+df_bronze_stream = spark.readStream \
+    .format("delta") \
+    .load(BRONZE_PATH)
 
 # 2. Schema do JSON bruto unificado (Conforme o transformations.py)
 def get_iot_schema() -> StructType:
@@ -42,7 +72,7 @@ def transform_iot_data(df_raw: DataFrame) -> DataFrame:
     )
     
     return df_silver.select(
-        col("timestamp"), 
+        col("timestamp").cast("timestamp").alias("timestamp"), 
         col("device_id"), 
         col("sensor_type"), 
         col("reading_value"), 
@@ -53,7 +83,7 @@ def transform_iot_data(df_raw: DataFrame) -> DataFrame:
 
 # 4. Sistema de Alertas via Webhook do Discord
 def send_discord_alert(anomaly_percentage, total_rows):
-    if not DISCORD_WEBHOOK_URL:
+    if not WEBHOOK_URL:
         return
     
     payload = {
@@ -71,7 +101,7 @@ def send_discord_alert(anomaly_percentage, total_rows):
     }
     
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        response = requests.post(WEBHOOK_URL, json=payload)
         response.raise_for_status()
     except Exception as e:
         print(f"Erro ao enviar alerta para o Discord: {e}")
@@ -99,35 +129,13 @@ def process_micro_batch(df_batch: DataFrame, batch_id: int):
 
 # 6. Inicialização do Stream Core
 def start_streaming():   
-    spark = SparkSession.builder \
-    .appName("IoT-Silver-Streaming-Processor") \
-    .master("local[2]") \
-    .config("spark.jars.packages", "io.delta:delta-spark_4.1_2.13:4.1.0,org.apache.hadoop:hadoop-azure:3.3.4,org.apache.hadoop:hadoop-common:3.3.4") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .config(f"fs.azure.account.key.{AZURE_STORAGE_ACCOUNT}.dfs.core.windows.net", AZURE_STORAGE_KEY) \
-    .config("spark.driver.host", "127.0.0.1") \
-    .config("spark.driver.bindAddress", "127.0.0.1") \
-    .config("spark.network.timeout", "800s") \
-    .config("spark.local.dir", "/tmp/spark_local_silver") \
-    .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop_tmp_silver") \
-    .config("fs.azure.account.key.stiotanalyticsrbgsprod.dfs.core.windows.net", AZURE_STORAGE_KEY) \
-    .getOrCreate()    
-
-    print("🤖 Iniciando consumo da camada Bronze em tempo real...")
-
-    # Leitura dos dados brutos em streaming da Bronze
-    df_bronze_stream = spark.readStream \
-        .format("parquet") \
-        .load(BRONZE_PATH)
-
     # Aplica as regras de negócio do transformations.py
     df_transformed_stream = transform_iot_data(df_bronze_stream)
 
     # Direciona o fluxo para o processador de micro-batch e checkpoints
     query = df_transformed_stream.writeStream \
         .foreachBatch(process_micro_batch) \
-        .option("checkpointLocation", CHECKPOINT_PATH) \
+        .option("checkpointLocation", CHECKPOINT) \
         .start()
 
     query.awaitTermination()

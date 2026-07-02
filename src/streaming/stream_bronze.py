@@ -30,20 +30,10 @@ PACKAGES = [
     "org.apache.hadoop:hadoop-azure:3.3.4"
 ]
 
-#local_ip = socket.gethostbyname(socket.gethostname())
-
-#tmp_dir = tempfile.gettempdir()
-#hadoop_tmp_dir = os.path.join(tmp_dir, "hadoop_tmp").replace("\\", "/")
-
 # Força o ecossistema Python/Java do Spark a se comunicar APENAS via loopback local
 os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
-
-# Usamos um caminho relativo limpo para evitar o problema do "C:/" que confunde o Hadoop no Windows
-#hadoop_tmp_dir = "/tmp/hadoop_tmp"
-#spark_local_dir = "/tmp/spark_local"
-#abfs_buffer_dir = "/tmp/abfs_buffer"
 
 spark = SparkSession.builder \
     .appName("IoT-Streaming-Bronze") \
