@@ -64,8 +64,8 @@ def get_iot_schema() -> StructType:
         StructField("sensor_type", StringType(), True),
         StructField("reading_value", DoubleType(), True),
         StructField("status", StringType(), True),
-        StructField("ingested_at_hub", StringType(), True),
         StructField("is_anomaly", StringType(), True)
+        StructField("ingested_at_hub", StringType(), True),
     ])
 
 def transform_iot_data(df_raw: DataFrame) -> DataFrame:
