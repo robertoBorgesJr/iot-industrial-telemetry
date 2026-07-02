@@ -28,7 +28,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyspark==3.5.0 chispa pytest delta-spark==4.1.0 python-dotenv
+        pip install pyspark==3.5.0 chispa pytest delta-spark==3.2.0 python-dotenv
 
     - name: Run PySpark Unit Tests with Chispa
       env:
