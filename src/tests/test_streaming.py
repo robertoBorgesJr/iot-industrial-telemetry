@@ -1,14 +1,16 @@
 import os
 import sys
-import pytest
-from pyspark.sql import SparkSession
-from chispa.dataframe_comparer import assert_df_equality
-from src.streaming.stream_silver import transform_iot_data
 
 # Força o Spark e seus workers a usarem estritamente o localhost no Windows
 os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
+import pytest
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+from chispa.dataframe_comparer import assert_df_equality
+from src.streaming.stream_silver import transform_iot_data
 
 @pytest.fixture(scope="session")
 def spark_test_session():
@@ -19,6 +21,8 @@ def spark_test_session():
         .config("spark.sql.shuffle.partitions", "1") \
         .config("spark.driver.host", "127.0.0.1") \
         .config("spark.driver.bindAddress", "127.0.0.1") \
+        .config("spark.driver.extraJavaOptions", "-Djava.net.preferIPv4Stack=true") \
+        .config("spark.executor.extraJavaOptions", "-Djava.net.preferIPv4Stack=true") \
         .getOrCreate()
 
 def test_transform_iot_data_detects_anomalies(spark_test_session):
@@ -45,6 +49,7 @@ def test_transform_iot_data_detects_anomalies(spark_test_session):
     ]
     schema_expected = ["timestamp", "device_id", "sensor_type", "reading_value", "is_anomaly"]
     df_expected = spark.createDataFrame(expected_data, schema_expected)
+    df_expected = spark.createDataFrame(expected_data, schema_expected).withColumn("timestamp", col("timestamp").cast("timestamp"))
 
     # 4. O Chispa compara as duas estruturas e valores
     assert_df_equality(df_result, df_expected, ignore_nullable=True)
