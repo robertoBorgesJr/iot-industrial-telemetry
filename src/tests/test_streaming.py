@@ -49,12 +49,13 @@ def test_transform_iot_data_detects_anomalies(spark_test_session):
 
     # 3. Criamos o DataFrame com o resultado ESPERADO para validação
     expected_data = [
-        ("2026-06-26T14:00:00Z", "MACH-101", "temperature", 60.0, False),
-        ("2026-06-26T14:02:00Z", "MACH-102", "temperature", 115.0, True),
-        ("2026-06-26T14:04:00Z", "MACH-103", "vibration", 45.0, True)
+        ("2026-06-26T14:00:00Z", "MACH-101", "temperature", 60.0, "normal", False, "2026-06-26 14:01:00"),
+        ("2026-06-26T14:02:00Z", "MACH-102", "temperature", 115.0, "normal", True, "2026-06-26 14:03:00"),
+        ("2026-06-26T14:04:00Z", "MACH-103", "vibration", 45.0, "critical", True, "2026-06-26 14:05:00")
     ]
-    schema_expected = ["timestamp", "device_id", "sensor_type", "reading_value", "is_anomaly"]
-    df_expected = spark.createDataFrame(expected_data, schema_expected)
+
+    schema_expected = ["timestamp", "device_id", "sensor_type", "reading_value", "status", "is_anomaly", "ingested_at_hub"]
+   
     df_expected = spark.createDataFrame(expected_data, schema_expected).withColumn("timestamp", col("timestamp").cast("timestamp"))
 
     # 4. O Chispa compara as duas estruturas e valores
