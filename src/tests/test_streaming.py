@@ -1,5 +1,11 @@
 import os
 import sys
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Carrega as variáveis de ambiente do arquivo .env
+BASE_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 # Força o Spark e seus workers a usarem estritamente o localhost no Windows
 os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
